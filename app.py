@@ -904,6 +904,30 @@ def refresh_data(asset: str = None):
     clog(f"─── Refresh start: {asset} ───", Fore.MAGENTA + Style.BRIGHT)
     errors = []
 
+    # ── Pre-populate with synthetic data immediately so page is never blank ──
+    base_prices = {
+        "BTC": 83000, "ETH": 1800, "SOL": 130, "ARB": 0.55,
+        "AVAX": 20, "DOGE": 0.16, "LINK": 13, "OP": 0.85,
+        "WIF": 0.9, "PEPE": 0.000008, "SUI": 2.2, "TIA": 3.0,
+    }
+    seed_price = base_prices.get(asset.upper(), 100.0)
+    seed_positions = (
+        _synthetic_positions("Hyperliquid", asset) +
+        _synthetic_positions("dYdX", asset) +
+        _synthetic_positions("GMX", asset)
+    )
+    seed_positions = enrich_positions(seed_positions, seed_price)
+    with state_lock:
+        if not state["positions"]:   # only pre-fill if empty
+            state["positions"]    = seed_positions
+            state["current_price"]= seed_price
+            state["long_notional"]= sum(p["notional"] for p in seed_positions if p["direction"]=="long")
+            state["short_notional"]= sum(p["notional"] for p in seed_positions if p["direction"]=="short")
+            state["traders"]      = aggregate_traders(seed_positions)
+            state["top_perps"]    = _fallback_top_perps()
+            state["last_updated"] = now_ts() + " (loading…)"
+            clog("Pre-populated with synthetic data while APIs load", Fore.YELLOW)
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         f_price  = ex.submit(fetch_current_price, asset)
         f_perps  = ex.submit(fetch_top_perps)
@@ -916,8 +940,8 @@ def refresh_data(asset: str = None):
     try:
         current_price = f_price.result()
     except Exception as e:
-        current_price = 0.0
-        errors.append(f"Price fetch: {e}")
+        current_price = seed_price
+        errors.append(f"Price: {e}")
 
     try:
         top_perps = f_perps.result()
